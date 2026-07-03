@@ -2,18 +2,48 @@
 
 ### Closed-Loop Driving Inside Feed-Forward 4D-Gaussian Worlds
 
-Drive **NVIDIA Alpamayo 1.5** closed-loop *inside* a **DGGT** feed-forward
-4D-Gaussian reconstruction of a scene from the **Waymo Open Dataset** — with
-**zero edits to AlpaSim core**. Reconstruct → render → drive, in the loop. The
-ego actually drives a full San Francisco hill block over 20 s: stopping at a red
-light and nudging past a bus, cones, and trash bags, all rendered from splats.
+**Splat2Drive** takes a short clip from a real self-driving log, rebuilds the
+scene as a photoreal 3D world made of **Gaussian splats**, and then lets a
+learned driving policy **drive through that reconstructed world in closed loop**
+— reacting to what it renders, frame by frame. It wires three existing systems
+together with a thin gRPC shim and **zero edits to the simulator's core**.
+
+Here the ego drives a full San Francisco hill block over 20 s: it stops at a red
+light and nudges past a bus, cones, and trash bags — objects that exist *only in
+the reconstruction* — all rendered from splats.
 
 ![hero](media/waymo_moving_hero.png)
 
-> `t≈13 s` — **BEV (top-left):** the ego (green) advances along the GT route
-> (orange), leaving a trail behind it. **Metrics:** `collision_at_fault 0.00`,
-> `offroad 0.00`, lateral `dist_to_gt_trajectory 0.22` (stays in-lane).
+> `t≈13 s` — **BEV (top-left):** the ego (green) advances along the ground-truth
+> route (orange), leaving a trail behind it. **Metrics:** `collision_at_fault
+> 0.00`, `offroad 0.00`, lateral `dist_to_gt_trajectory 0.22` (stays in-lane).
 > **Camera:** the reconstructed hill street, driven `STRAIGHT`.
+
+---
+
+## Why this is interesting
+
+Closed-loop testing of a driving policy normally needs either a **hand-built
+simulator** (expensive, not photoreal) or **log replay** (photoreal, but the
+world doesn't react to what the policy does). Splat2Drive gets both at once: the
+test world is **reconstructed automatically from a single real clip**, and the
+policy's own steering feeds back into what it sees — a reactive, photoreal,
+closed loop with no manual scene authoring.
+
+## The moving parts
+
+| Component | What it is | Role here |
+| --- | --- | --- |
+| **Waymo Open Dataset** | public real driving logs | source clip we reconstruct |
+| **DGGT** | feed-forward, pose-free 4D-Gaussian-Splatting reconstructor | turns the clip into a 3D splat world (`.pt` dump) |
+| **GS-World** | rendering/simulation toolkit | provides `DGGTRenderBackend` to render the dump from any camera pose |
+| **AlpaSim** (NVlabs) | closed-loop AV simulator | runs the rollout; can call an *external* renderer over gRPC |
+| **Alpamayo 1.5** (NVIDIA) | 10B vision-language-action driving policy | the "driver" — sees rendered frames, emits reasoning + a trajectory |
+| **this repo** | a ~150-line gRPC server + scripts | the glue that lets AlpaSim render from a DGGT dump |
+
+*Acronyms: **BEV** = bird's-eye view, **GT** = ground truth, **CoT** =
+chain-of-thought, **VLA** = vision-language-action, **4DGS** = 4D Gaussian
+Splatting.*
 
 ---
 
@@ -62,7 +92,8 @@ frames:
 - [`media/waymo_moving_cam.mp4`](media/waymo_moving_cam.mp4) — clean camera only, no overlay
 
 A self-contained visual write-up is in [`docs/index.html`](docs/index.html)
-(everything base64-embedded; open it directly or serve via GitHub Pages).
+(everything base64-embedded). GitHub won't render it inline — download it and
+open locally, or enable **GitHub Pages** (Settings → Pages → `main` / `/docs`).
 
 ---
 
@@ -79,23 +110,23 @@ DGGTRenderBackend  (GS-World)    _render_w2c(w2c, K, frame_idx) → RGB
       │
       ▼
 server/server.py                 gRPC WorldModelService (this repo)
-      │   50051, playback mode: session-relative time → dump frame
+      │   :50051, playback mode: session-relative time → dump frame
       ▼
 AlpaSim  deploy=external_video_model  driver=alpamayo1_5_1cam
-      │   Docker containers reach the host server at its LAN IP
+      │   Docker driver reaches the host server over the LAN
       ▼
 Alpamayo 1.5 (10B)  closed-loop  sees splat frames, emits CoT + trajectory
 ```
 
-The only new code is an **additive** gRPC server: a subclass of the generated
-`WorldModelServiceServicer` implementing four methods
+The only new code is an **additive** gRPC server: a subclass of AlpaSim's
+generated `WorldModelServiceServicer` implementing four methods
 (`get_version` / `start_session` / `render_video_chunk` / `close_session`).
 AlpaSim is otherwise stock.
 
 **Key facts**
 - **DGGT is pinhole-only** (pose encoding `absT_quaR_FoV`, no distortion term).
-  Waymo is already pinhole, so no undistortion step is needed (unlike the NVIDIA
-  f-theta NuRec scenes, which must be undistorted first).
+  Waymo is already pinhole, so no undistortion step is needed (unlike NVIDIA
+  f-theta fisheye scenes, which must be undistorted first).
 - **Playback mode:** the render camera follows the dump's own logged trajectory,
   indexed by session-relative time. `--clip_duration 20.0` maps rollout time
   across *all* dump frames (without it the camera freezes early).
@@ -119,30 +150,57 @@ alpasim/
 viz/
   build_waymo_moving_html.py  base64-embeds the media into docs/index.html
 docs/
-  index.html              self-contained visual write-up (published as an Artifact)
+  index.html              self-contained visual write-up
 media/                    hero, motion strip, reasoning timeline, mp4s
 ```
+
+---
+
+## Prerequisites
+
+This repo is **glue only** — it does not vendor the models or datasets. You need
+your own working installs of:
+
+- **DGGT** + **GS-World** (the `dggt` conda env below imports
+  `gs_world.simulation.dggt_render_backend`),
+- **AlpaSim** (provides `alpasim_wizard` and the `alpasim_grpc` protobufs),
+- the **Alpamayo 1.5** checkpoint, and
+- one or more clips from the **Waymo Open Dataset**.
+
+The scripts read machine-specific locations from environment variables — nothing
+is hard-coded:
+
+| Variable | Used by | Meaning |
+| --- | --- | --- |
+| `GS_WORLD_ROOT` | server, render | path to your GS-World checkout (default `/home/ubuntu/GS-World`) |
+| `ALPASIM_DIR` | `run_s007_e2e.sh` | path to your AlpaSim checkout |
+| `RENDERER_HOST` | `run_s007_e2e.sh` | `host:port` the Docker driver reaches the server at — the host's **LAN IP**, not `localhost` |
+| `CHECKPOINT` | `run_s007_e2e.sh` | path to the Alpamayo-1.5-10B checkpoint |
 
 ---
 
 ## Reproduce
 
 ```bash
-# 1) Build the DGGT 4DGS dump from Waymo front-camera frames (in the DGGT repo)
-python inference.py mode=3 --dump_gs   # → 001_gaussians_dump.pt
+# 1) Build a DGGT 4DGS dump from Waymo front-camera frames (in the DGGT repo)
+python inference.py mode=3 --dump_gs        # → 001_gaussians_dump.pt
 
 # 2) Start the render server (host machine, dggt conda env)
-server/run_server_generic.sh /path/to/scene007/001_gaussians_dump.pt 3
-#   verify it answers before launching AlpaSim:
-#   python -c "import grpc; from alpasim_grpc.v0 import video_model_pb2_grpc as g, common_pb2 as c; \
-#     print(g.WorldModelServiceStub(grpc.insecure_channel('HOST:50051')).get_version(c.Empty()))"
+export GS_WORLD_ROOT=/path/to/GS-World
+server/run_server_generic.sh /path/to/scene007/001_gaussians_dump.pt 3   # <dump> <gpu>
 
-# 3) Run Alpamayo closed-loop against it (AlpaSim repo)
-#    edit the renderer IP in alpasim/run_s007_e2e.sh to the host's LAN IP
+#    verify it answers BEFORE launching AlpaSim (else the runtime probe times out):
+python -c "import grpc; from alpasim_grpc.v0 import video_model_pb2_grpc as g, common_pb2 as c; \
+  print(g.WorldModelServiceStub(grpc.insecure_channel('HOST:50051')).get_version(c.Empty()))"
+
+# 3) Run Alpamayo closed-loop against it (needs your AlpaSim install)
+export ALPASIM_DIR=/path/to/alpasim
+export RENDERER_HOST=<host-LAN-IP>:50051
+export CHECKPOINT=/path/to/Alpamayo-1.5-10B
 bash alpasim/run_s007_e2e.sh
 
 # 4) Rebuild the write-up page
-python viz/build_waymo_moving_html.py   # → docs/index.html
+python viz/build_waymo_moving_html.py       # → docs/index.html
 ```
 
 ---
@@ -154,7 +212,7 @@ python viz/build_waymo_moving_html.py   # → docs/index.html
   so **absolute metrics are not meaningful** — the point is that the policy
   perceives reconstruction-only objects and drives coherently.
 - `collision_any 1.00` is a *rear* event and **not at fault** (`collision_at_fault 0.00`).
-- `dist_to_gt_location` (5.65) grows from speed/timing offset; lateral
+- `dist_to_gt_location` (5.65) grows from a speed/timing offset; lateral
   `dist_to_gt_trajectory` (0.22) stays tight — it followed the lane.
 - The server renders **pinhole**; Alpamayo nominally expects f-theta. The
   intrinsic mismatch is tolerable for perception here; matching it (gsplat
@@ -166,14 +224,27 @@ python viz/build_waymo_moving_html.py   # → docs/index.html
 
 ## Environment notes
 
-- Server runs in a `dggt` conda env (GS-World + gsplat). gsplat JIT build on an
+- Server runs in a `dggt` conda env (GS-World + gsplat). gsplat's JIT build on an
   RTX PRO 6000 Blackwell needs `TORCH_CUDA_ARCH_LIST=12.0` and
-  `CPATH=$CUDA_HOME/targets/x86_64-linux/include` (see `run_server_generic.sh`).
-- AlpaSim Docker containers reach the host server via the host's **LAN IP**
+  `CPATH=$CUDA_HOME/targets/x86_64-linux/include` (see `run_server_generic.sh`);
+  adjust the conda paths in that script for your machine.
+- AlpaSim's Docker driver reaches the host server via the host's **LAN IP**
   (not `localhost`).
 - Wait for the server to finish `torch.load` (large dump) and answer
   `get_version` before launching AlpaSim, or the runtime probe hits
   `DEADLINE_EXCEEDED`.
 
-*Alpamayo 1.5 is NVIDIA's; AlpaSim is NVlabs'; DGGT and GS-World are their
-respective authors'. This repo is the integration glue + write-up only.*
+---
+
+## Attribution & license
+
+This repository is **integration glue + a write-up**. It does not redistribute
+any third-party models, weights, or datasets:
+
+- **Alpamayo 1.5** — © NVIDIA
+- **AlpaSim** — © NVlabs
+- **DGGT** / **GS-World** — © their respective authors
+- **Waymo Open Dataset** — © Waymo LLC (imagery shown is reconstructed from it)
+
+Use each under its own license/terms. The glue code and scripts here are provided
+as-is for research use.
