@@ -179,7 +179,46 @@ is hard-coded:
 
 ---
 
-## Reproduce
+## Setup
+
+The **render server** (this repo's core) runs in a conda env that can import
+GS-World. Everything else (AlpaSim, Docker, the Alpamayo checkpoint) lives in
+your AlpaSim install and is only needed for the full closed loop.
+
+```bash
+# server env — Python deps beyond a working GS-World + gsplat install:
+conda activate dggt          # your GS-World env
+pip install grpcio pillow imageio numpy    # torch is already there for GS-World
+```
+
+**Make `alpasim_grpc` importable in the server env.** `server.py` imports the
+protobufs AlpaSim generates (`alpasim_grpc.v0`). Installing AlpaSim into the env
+is the clean way. If you can't, point Python at AlpaSim's generated gRPC dir —
+but note its `__init__.py` calls `importlib.metadata.version("alpasim_grpc")`, so
+it also needs a package record or it raises at import:
+
+```bash
+SP=$(python -c "import site; print(site.getsitepackages()[0])")
+echo "/path/to/alpasim/src/grpc" > "$SP/alpasim_grpc.pth"          # importable
+mkdir -p "$SP/alpasim_grpc-0.0.0.dist-info"                        # satisfies metadata.version()
+printf 'Metadata-Version: 2.1\nName: alpasim_grpc\nVersion: 0.0.0\n' \
+  > "$SP/alpasim_grpc-0.0.0.dist-info/METADATA"
+```
+
+### Smoke test (no AlpaSim, no Alpamayo)
+
+Fastest check that the dump + GS-World backend render at all — makes a
+start/mid/end strip straight from a dump:
+
+```bash
+export GS_WORLD_ROOT=/path/to/GS-World
+python render/sanity_generic.py /path/to/scene007/001_gaussians_dump.pt strip.png scene007
+# → writes strip.png (three rendered frames); prints the dump's frame count
+```
+
+---
+
+## Reproduce (full closed loop)
 
 ```bash
 # 1) Build a DGGT 4DGS dump from Waymo front-camera frames (in the DGGT repo)
@@ -192,12 +231,14 @@ server/run_server_generic.sh /path/to/scene007/001_gaussians_dump.pt 3   # <dump
 #    verify it answers BEFORE launching AlpaSim (else the runtime probe times out):
 python -c "import grpc; from alpasim_grpc.v0 import video_model_pb2_grpc as g, common_pb2 as c; \
   print(g.WorldModelServiceStub(grpc.insecure_channel('HOST:50051')).get_version(c.Empty()))"
+#    expect: version_id: "dggt-wms-0.1"
 
 # 3) Run Alpamayo closed-loop against it (needs your AlpaSim install)
 export ALPASIM_DIR=/path/to/alpasim
-export RENDERER_HOST=<host-LAN-IP>:50051
+export RENDERER_HOST=<host-LAN-IP>:50051      # host's LAN IP, NOT localhost (driver is in Docker)
 export CHECKPOINT=/path/to/Alpamayo-1.5-10B
 bash alpasim/run_s007_e2e.sh
+#    outputs land in $ALPASIM_DIR/s007_e2e/rollouts/... (rollout.asl + *_reasoning_overlay.mp4)
 
 # 4) Rebuild the write-up page
 python viz/build_waymo_moving_html.py       # → docs/index.html
