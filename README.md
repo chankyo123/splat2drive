@@ -162,10 +162,20 @@ This repo is **glue only** — it does not vendor the models or datasets. You ne
 your own working installs of:
 
 - **DGGT** + **GS-World** (the `dggt` conda env below imports
-  `gs_world.simulation.dggt_render_backend`),
-- **AlpaSim** (provides `alpasim_wizard` and the `alpasim_grpc` protobufs),
-- the **Alpamayo 1.5** checkpoint, and
-- one or more clips from the **Waymo Open Dataset**.
+  `gs_world.simulation.dggt_render_backend`). DGGT mode-3 also needs two
+  checkpoints in its `pretrained/`: the Waymo model
+  (`model_latest_waymo.pth`) and the TAPIP3D tracker (`tracking_model.pth`) —
+  see the [DGGT repo](https://github.com/xiaomi-research/dggt) for download links.
+- **AlpaSim** (provides `alpasim_wizard` and the `alpasim_grpc` protobufs) +
+  **Docker**.
+- the **Alpamayo 1.5** checkpoint.
+- one or more clips from the **[Waymo Open Dataset](https://waymo.com/open/)**.
+- an **AlpaSim scene package (`usdz`)** for the `scene_id` you pass in step 3.
+  For `external_video_model` the pixels come from *our* server, but AlpaSim still
+  loads a scene scaffold (route / actors / calibration) — so that `usdz` must
+  contain `clipgt/calibration_estimate.parquet` **and** a `frames/<cam>/` dir, or
+  the run aborts. The scaffold does **not** have to match the reconstructed scene
+  (that mismatch is exactly the Tier-0 caveat below).
 
 The scripts read machine-specific locations from environment variables — nothing
 is hard-coded:
@@ -220,10 +230,33 @@ python render/sanity_generic.py /path/to/scene007/001_gaussians_dump.pt strip.pn
 
 ## Reproduce (full closed loop)
 
-```bash
-# 1) Build a DGGT 4DGS dump from Waymo front-camera frames (in the DGGT repo)
-python inference.py mode=3 --dump_gs        # → 001_gaussians_dump.pt
+**Phase A — build the world (DGGT repo).** Point `--image_dir` at a Waymo Open
+Dataset root laid out the way DGGT's `WaymoOpenDataset` expects; `--scene_names`
+selects the scene (`7` → `007`). Mode 3 reconstructs a 4DGS world and
+`--dump_gs` writes the consolidated dump the render server loads.
 
+```bash
+# in the DGGT repo, dggt conda env
+python inference.py \
+  --mode 3 \
+  --image_dir /path/to/waymo_open_dataset_root \
+  --scene_names 7 \
+  --sequence_length 197 \
+  --intervals 2 \
+  --ckpt_path pretrained/model_latest_waymo.pth \
+  --output_path out/scene007 \
+  --dump_gs dumps/scene007
+# → dumps/scene007/001_gaussians_dump.pt   (the file the server serves)
+```
+
+> Tips: `--sequence_length` is how many frames to reconstruct (≈197 for a 20 s
+> clip); TAPIP3D loads *every* frame on disk, so on a tight GPU subsample the
+> frames / lower resolution. Waymo is pinhole, so **no undistortion** is needed.
+> Sanity-check the dump with the smoke test above before going further.
+
+**Phase B — run the driver.**
+
+```bash
 # 2) Start the render server (host machine, dggt conda env)
 export GS_WORLD_ROOT=/path/to/GS-World
 server/run_server_generic.sh /path/to/scene007/001_gaussians_dump.pt 3   # <dump> <gpu>
@@ -238,11 +271,17 @@ export ALPASIM_DIR=/path/to/alpasim
 export RENDERER_HOST=<host-LAN-IP>:50051      # host's LAN IP, NOT localhost (driver is in Docker)
 export CHECKPOINT=/path/to/Alpamayo-1.5-10B
 bash alpasim/run_s007_e2e.sh
-#    outputs land in $ALPASIM_DIR/s007_e2e/rollouts/... (rollout.asl + *_reasoning_overlay.mp4)
 
-# 4) Rebuild the write-up page
-python viz/build_waymo_moving_html.py       # → docs/index.html
+# 4) Watch the result — the closed-loop rollout lands under:
+#    $ALPASIM_DIR/s007_e2e/rollouts/<scene>/<uuid>/
+#      *_reasoning_overlay.mp4   camera + live reasoning + trajectory prediction
+#      *_default.mp4             clean camera
+#      rollout.asl               full log (poses, per-step driver reasoning, metrics)
 ```
+
+> `viz/build_waymo_moving_html.py` is the exact script that produced *this repo's*
+> `docs/index.html`; its asset paths point at the authoring machine, so treat it
+> as provenance / a template rather than a turnkey tool for your own rollout.
 
 ---
 
