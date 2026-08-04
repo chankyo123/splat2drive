@@ -156,7 +156,15 @@ reactive/                 REACTIVE closed-loop: world reacts to the policy's ste
   README.md               how reactive rendering works + results
   reactive.html           self-contained write-up
   media/ , scripts/       verification, reactive-vs-baseline, live closed-loop
+workspace/                LOCAL working data — git-ignored, not pushed
+  inputs/                 drop new videos to test here
+  results/                generated dumps, rollouts, renders (+ heavy originals)
 ```
+
+> **Where things go:** all local video in/out lives under
+> [`workspace/`](workspace/) so the repo stays clean — its `inputs/` and
+> `results/` contents are git-ignored ([`workspace/README.md`](workspace/README.md)).
+> Drop a new test video in `workspace/inputs/`.
 
 > **Reactive extension:** by default the world ignores the policy's steering
 > (playback). [`reactive/`](reactive/) adds `--mode reactive` to the server so the

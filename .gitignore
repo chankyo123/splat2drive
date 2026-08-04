@@ -4,3 +4,10 @@ __pycache__/
 *.pt
 *.asl
 .DS_Store
+
+# --- local working data: never committed, folders kept via .gitkeep ---
+# drop input videos here / generated dumps, rollouts, renders land here
+workspace/inputs/*
+workspace/results/*
+!workspace/inputs/.gitkeep
+!workspace/results/.gitkeep
