@@ -30,16 +30,26 @@ from gs_world.simulation.dggt_render_backend import DGGTRenderBackend
 
 class DGGTWorldModelServicer(vmg.WorldModelServiceServicer):
     def __init__(self, dump_path, metric_scale, mode="playback", device="cuda",
-                 clip_duration=None, ref_path=None, lat_clip=5.0):
-        print(f"[server] loading DGGT backend: {dump_path} (metric_scale={metric_scale}, mode={mode})", flush=True)
-        self.backend = DGGTRenderBackend(dump_path, metric_scale=metric_scale, device=device)
-        if clip_duration:
-            self.backend.real_duration_s = float(clip_duration)
-            print(f"[server] clip_duration override -> {clip_duration}s (dump spans full rollout)", flush=True)
-        d = torch.load(dump_path, map_location=device, weights_only=False)
-        self.ext = d['cameras']['extrinsic'].to(device).float()
-        self.K = d['cameras']['intrinsic'].to(device).float()
-        self.ext_np = self.ext.cpu().numpy().astype(np.float64)   # (N,4,4) world->cam
+                 clip_duration=None, ref_path=None, lat_clip=5.0,
+                 backend="dggt", field_dir=None, holefill=True):
+        if backend == "window":
+            print(f"[server] loading WindowField backend: {field_dir} (holefill={holefill}, mode={mode})", flush=True)
+            from window_field_backend import WindowFieldBackend
+            self.backend = WindowFieldBackend(field_dir, device=device,
+                                              clip_duration=clip_duration, holefill=holefill)
+            self.ext = self.backend.ext
+            self.K = self.backend.K
+            self.ext_np = self.backend.ext_np.astype(np.float64)
+        else:
+            print(f"[server] loading DGGT backend: {dump_path} (metric_scale={metric_scale}, mode={mode})", flush=True)
+            self.backend = DGGTRenderBackend(dump_path, metric_scale=metric_scale, device=device)
+            if clip_duration:
+                self.backend.real_duration_s = float(clip_duration)
+                print(f"[server] clip_duration override -> {clip_duration}s (dump spans full rollout)", flush=True)
+            d = torch.load(dump_path, map_location=device, weights_only=False)
+            self.ext = d['cameras']['extrinsic'].to(device).float()
+            self.K = d['cameras']['intrinsic'].to(device).float()
+            self.ext_np = self.ext.cpu().numpy().astype(np.float64)   # (N,4,4) world->cam
         self.device = device
         self.mode = mode
         self.lat_clip = float(lat_clip)
@@ -142,9 +152,10 @@ class DGGTWorldModelServicer(vmg.WorldModelServiceServicer):
 
 
 def serve(dump_path, metric_scale, mode, host, port, max_workers=4, clip_duration=None,
-          ref_path=None, lat_clip=5.0):
+          ref_path=None, lat_clip=5.0, backend="dggt", field_dir=None, holefill=True):
     servicer = DGGTWorldModelServicer(dump_path, metric_scale, mode=mode, clip_duration=clip_duration,
-                                      ref_path=ref_path, lat_clip=lat_clip)
+                                      ref_path=ref_path, lat_clip=lat_clip,
+                                      backend=backend, field_dir=field_dir, holefill=holefill)
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers),
                          options=[("grpc.max_send_message_length", 256 * 1024 * 1024),
                                   ("grpc.max_receive_message_length", 256 * 1024 * 1024)])
@@ -157,7 +168,10 @@ def serve(dump_path, metric_scale, mode, host, port, max_workers=4, clip_duratio
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dump", required=True)
+    ap.add_argument("--backend", choices=["dggt", "window"], default="dggt")
+    ap.add_argument("--dump", default=None, help="dggt backend: path to a DGGT gaussian dump .pt")
+    ap.add_argument("--field_dir", default=None, help="window backend: dir with manifest + window/single PLYs")
+    ap.add_argument("--no_holefill", action="store_true", help="window backend: window layer only, no single-field fill")
     ap.add_argument("--metric_scale", type=float, default=34.108)
     ap.add_argument("--mode", choices=["playback", "reactive"], default="playback")
     ap.add_argument("--ref_path", default=None,
@@ -169,4 +183,5 @@ if __name__ == "__main__":
     ap.add_argument("--clip_duration", type=float, default=None)
     args = ap.parse_args()
     serve(args.dump, args.metric_scale, args.mode, args.host, args.port,
-          clip_duration=args.clip_duration, ref_path=args.ref_path, lat_clip=args.lat_clip)
+          clip_duration=args.clip_duration, ref_path=args.ref_path, lat_clip=args.lat_clip,
+          backend=args.backend, field_dir=args.field_dir, holefill=not args.no_holefill)
