@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.expanduser("~/GS-World/submodules/alpasim_src/src/grp
 from alpasim_grpc.v0.logging_pb2 import LogEntry
 
 ASL, OUT, LABEL = sys.argv[1], sys.argv[2], sys.argv[3]
+WORLD = sys.argv[4] if len(sys.argv) > 4 else "DGGT 4DGS"   # rendered-world name shown in the header
 os.makedirs(OUT, exist_ok=True)
 
 def _font(sz):
@@ -114,7 +115,7 @@ for i, (t, jb) in enumerate(frames):
     dr = ImageDraw.Draw(canvas)
     # header
     dr.rectangle([0, 0, W, 26], fill=(0, 0, 0))
-    dr.text((8, 5), f"{LABEL}  |  Alpamayo 1.5 closed-loop in DGGT 4DGS world  |  t={ (t-frames[0][0])/1e6:5.2f}s  frame {i+1}/{len(frames)}",
+    dr.text((8, 5), f"{LABEL}  |  Alpamayo 1.5 closed-loop in {WORLD} world  |  t={ (t-frames[0][0])/1e6:5.2f}s  frame {i+1}/{len(frames)}",
             font=_font(15), fill=(180, 230, 255))
     # BEV inset: predicted trajectory relative to the ego, forward=up, FIXED scale.
     # (Trajectory is stored ego-aligned — quats ~identity — so no rotation needed; a
