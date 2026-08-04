@@ -152,7 +152,17 @@ viz/
 docs/
   index.html              self-contained visual write-up
 media/                    hero, motion strip, reasoning timeline, mp4s
+reactive/                 REACTIVE closed-loop: world reacts to the policy's steering
+  README.md               how reactive rendering works + results
+  reactive.html           self-contained write-up
+  media/ , scripts/       verification, reactive-vs-baseline, live closed-loop
 ```
+
+> **Reactive extension:** by default the world ignores the policy's steering
+> (playback). [`reactive/`](reactive/) adds `--mode reactive` to the server so the
+> policy's lateral deviation shifts the camera in the 4DGS world, and runs a live
+> Alpamayo closed-loop against it (on a remote idle GPU). See
+> [`reactive/README.md`](reactive/README.md).
 
 ---
 
