@@ -49,6 +49,9 @@ Absolute paths inside these reflect the authoring machine — adapt for reuse.
 | `scripts/render_client.py` | gRPC client: render the policy's real path reactive vs baseline |
 | `scripts/run_reactive_server.sh` | launch the reactive DGGT server for a dump + ref path |
 | `scripts/build_reactive_html.py` | rebuild `reactive.html` from `../media` |
+| `scripts/reactive_demo.py` | self-contained reactive render for ANY dump: lateral sweep + baseline-vs-reactive (no AlpaSim) |
+| `scripts/build_cle_overlay.py` | build a closed-loop overlay (world + reasoning + pred trajectory) straight from a `rollout.asl` |
+| `scripts/build_results_html.py` | assemble `workspace/results/new_videos_results.html` from the per-clip media |
 | `scripts/window_launch.py` | (GPU-contended box) wait for a free GPU, then run the closed-loop |
 | `scripts/remote_patch.sh` | patch a transferred compose for a remote idle-GPU box (driver→GPU, renderer→host, HF offline) |
 
