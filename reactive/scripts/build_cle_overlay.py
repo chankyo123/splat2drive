@@ -116,19 +116,30 @@ for i, (t, jb) in enumerate(frames):
     dr.rectangle([0, 0, W, 26], fill=(0, 0, 0))
     dr.text((8, 5), f"{LABEL}  |  Alpamayo 1.5 closed-loop in DGGT 4DGS world  |  t={ (t-frames[0][0])/1e6:5.2f}s  frame {i+1}/{len(frames)}",
             font=_font(15), fill=(180, 230, 255))
-    # BEV inset of predicted trajectory (forward=up, left=+x-left)
+    # BEV inset: predicted trajectory relative to the ego, forward=up, FIXED scale.
+    # (Trajectory is stored ego-aligned — quats ~identity — so no rotation needed; a
+    # fixed metric scale keeps near-stop / settle predictions small instead of letting
+    # per-frame auto-normalisation blow a 0.4 m creep up into a full-inset arrow.)
     xy = latest(pred, t)
-    bev = 170
+    bev = 176; FWD_MAX = 20.0; LAT_MAX = 6.0
     bx0, by0 = W - bev - 10, 34
     dr.rectangle([bx0, by0, bx0 + bev, by0 + bev], fill=(20, 22, 30), outline=(70, 80, 100))
-    dr.text((bx0 + 6, by0 + 3), "pred traj (BEV)", font=_font(11), fill=(150, 170, 200))
+    dr.text((bx0 + 6, by0 + 3), "pred traj  (BEV · fwd=up · 20 m)", font=_font(10), fill=(150, 170, 200))
+    cx, cy = bx0 + bev / 2, by0 + bev - 16
+    dr.line([(cx, by0 + 18), (cx, cy)], fill=(55, 62, 78), width=1)              # forward axis (up)
+    dr.line([(bx0 + 12, cy), (bx0 + bev - 12, cy)], fill=(55, 62, 78), width=1)  # lateral baseline
     if xy is not None and len(xy) > 1:
-        p = xy - xy[0]
-        rng = max(1e-3, np.abs(p).max())
-        cx, cy = bx0 + bev / 2, by0 + bev - 16
-        pts = [(cx - (pt[1] / rng) * (bev/2 - 14), cy - (pt[0] / rng) * (bev - 30)) for pt in p]
+        p = xy - xy[0]                                                            # relative to ego now
+        fx = np.clip(p[:, 0], -FWD_MAX, FWD_MAX)                                  # forward metres
+        ly = np.clip(p[:, 1], -LAT_MAX, LAT_MAX)                                  # left metres
+        pts = [(cx - (ly[k] / LAT_MAX) * (bev / 2 - 12), cy - (fx[k] / FWD_MAX) * (bev - 34))
+               for k in range(len(fx))]
         dr.line(pts, fill=(120, 240, 140), width=3)
-        dr.ellipse([cx-4, cy-4, cx+4, cy+4], fill=(255, 210, 90))
+        net = float(p[-1, 0])
+        dr.text((bx0 + 6, by0 + bev - 15),
+                (f"+{net:.1f} m fwd" if net >= 0.3 else (f"{net:.1f} m (settle)" if net < 0 else "~stopped")),
+                font=_font(10), fill=(120, 240, 140) if net >= 0.3 else (240, 190, 120))
+    dr.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=(255, 210, 90))              # ego now (bottom)
     # reasoning caption
     txt = latest(reasons, t) or "(no reasoning emitted this step)"
     txt = " ".join(txt.split())
@@ -144,7 +155,7 @@ for i, (t, jb) in enumerate(frames):
         imageio.imwrite(os.path.join(OUT, f"{LABEL}_reasoning_frame.png"), arr)
         reason_frame_saved = True
 
-imageio.mimwrite(os.path.join(OUT, f"{LABEL}_cle_overlay.mp4"), out_frames, fps=10, quality=8)
+imageio.mimwrite(os.path.join(OUT, f"{LABEL}_cle_overlay.mp4"), out_frames, fps=20, quality=8)
 # motion strip: downscale keyframes and stack horizontally
 sh = min(a.shape[0] for a in strip_keys)
 strip = np.concatenate([np.asarray(Image.fromarray(a).resize((int(a.shape[1]*sh/a.shape[0]), sh))) for a in strip_keys], axis=1)
